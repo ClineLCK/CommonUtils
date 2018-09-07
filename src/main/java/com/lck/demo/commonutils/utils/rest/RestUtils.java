@@ -9,6 +9,7 @@ import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.Collection;
 import java.util.Map;
 
 /**
@@ -23,23 +24,69 @@ public class RestUtils {
 
     /**
      * get 请求返回体
+     * <p>
+     * rest: false
+     * http://localhost:8080/test/msmss?phone=1&msg=2     拼接为普通http请求
+     * rest: true
+     * http://localhost:8080/test/msmss/{id}?hihi={hihi}     map      rest请求
      *
-     * @param url 请求路由
-     * @param map 请求参数
+     * @param url  请求路由
+     * @param map  请求参数
+     * @param rest 表名请求url是否为restful
      * @return
      * @throws Exception
      */
-    private static ResponseEntity<String> getResponseEntity(String url, Map<String, Object> map) throws Exception {
+    private static ResponseEntity<String> getResponseEntity(String url, Map<String, Object> map, boolean rest) throws Exception {
         RestTemplate restTemplate = getRestTemplate();
-
         ResponseEntity<String> result;
-        if (CollectionUtils.isEmpty(map)) {
-            result = restTemplate.getForEntity(url, String.class);
+
+        //restful 请求
+        if (rest) {
+            if (CollectionUtils.isEmpty(map)) {
+                result = restTemplate.getForEntity(url, String.class);
+            } else {
+                result = restTemplate.getForEntity(url, String.class, map);
+            }
         } else {
-            result = restTemplate.getForEntity(url, String.class, map);
+            //普通http请求
+            if (CollectionUtils.isEmpty(map)) {
+                result = restTemplate.getForEntity(url, String.class);
+            } else {
+                // restTemplate 弱点
+                StringBuilder stringBuilder = new StringBuilder(url);
+                stringBuilder.append("?");
+                for (Map.Entry<String, Object> entry : map.entrySet()) {
+                    // 集合元素处理
+                    if (entry.getValue() instanceof Collection) {
+                        for (Object object : (Collection) entry.getValue()) {
+                            addPath(stringBuilder, entry.getKey(), object);
+                        }
+                    } else {
+                        addPath(stringBuilder, entry.getKey(), entry.getValue());
+                    }
+                }
+                // 去除最后一位&
+                result = restTemplate.getForEntity(stringBuilder.substring(0, stringBuilder.length() - 1), String.class);
+            }
         }
         return result;
     }
+
+    /**
+     * get 请求拼装
+     *
+     * @param stringBuilder
+     * @param key
+     * @param value
+     * @return
+     */
+    private static void addPath(StringBuilder stringBuilder, String key, Object value) {
+        stringBuilder.append(key);
+        stringBuilder.append("=");
+        stringBuilder.append(value);
+        stringBuilder.append("&");
+    }
+
 
     /**
      * 直接返回rest 请求内容
@@ -65,13 +112,13 @@ public class RestUtils {
      * @param map 请求参数
      * @return
      */
-    public static String get(String url, Map<String, Object> map) {
+    public static String get(String url, Map<String, Object> map, boolean rest) {
         try {
             if (StringUtils.isEmpty(url)) {
                 log.error("rest request url can't be null or empty");
                 return "";
             }
-            ResponseEntity<String> result = getResponseEntity(url, map);
+            ResponseEntity<String> result = getResponseEntity(url, map, rest);
             return resultResponse(url, result);
         } catch (Exception e) {
             log.error("{} for url: {}", e.getMessage(), url, e);
@@ -87,12 +134,12 @@ public class RestUtils {
      * @param map 请求参数
      * @return
      */
-    public static <T> HttpRestResult<T> getForHttpRestResult(String url, Map<String, Object> map) {
+    public static <T> HttpRestResult<T> getForHttpRestResult(String url, Map<String, Object> map, boolean rest) {
         try {
             if (StringUtils.isEmpty(url)) {
                 return new HttpRestResult<>(false, null, "", "url can't be null or empty");
             }
-            ResponseEntity<String> result = getResponseEntity(url, map);
+            ResponseEntity<String> result = getResponseEntity(url, map, rest);
             return resultEntityResponse(url, result);
         } catch (Exception e) {
             log.error("{} for url: {}", e.getMessage(), url, e);
@@ -107,7 +154,7 @@ public class RestUtils {
      * @param url    请求地址
      * @param result 请求返回内容
      * @param <T>    请求封装转换类
-     * @return¬
+     * @return
      */
     private static <T> HttpRestResult<T> resultEntityResponse(String url, ResponseEntity<String> result) {
         log.info("rest request for url:{} get responseCode: {}", url, result.getStatusCode().toString());
@@ -212,12 +259,58 @@ public class RestUtils {
     }
 
     /**
+     * delete 请求返回封装HttpRestResult
+     *
+     * @param url 请求路由
+     * @param map 请求参数
+     * @param <T> 返回类型实体类
+     * @return
+     */
+    public static <T> HttpRestResult<T> deleteForHttpRestResult(String url, Map<String, Object> map) {
+        try {
+            if (StringUtils.isEmpty(url)) {
+                return new HttpRestResult<>(false, null, "", "url can't be null or empty");
+            }
+            ResponseEntity<String> result = deleteResponseEntity(url, map);
+            return resultEntityResponse(url, result);
+        } catch (Exception e) {
+            log.error("{} for url: {}", e.getMessage(), url, e);
+            return new HttpRestResult<>(false, null, "", e.getMessage());
+        }
+    }
+
+    /**
+     * delete 请求返回体
+     * 只支持restful 格式
+     * 即 http://localhost:8080/test/msmss/{id}?hihi={hihi}     map      rest请求
+     *
+     * @param url
+     * @param map
+     * @return
+     */
+    private static ResponseEntity<String> deleteResponseEntity(String url, Map<String, Object> map) {
+        RestTemplate restTemplate = getRestTemplate();
+
+        HttpHeaders httpHeaders = getHeaders();
+
+        //利用容器实现数据封装，发送
+        HttpEntity<String> entity = new HttpEntity<>(httpHeaders);
+
+        if (CollectionUtils.isEmpty(map)) {
+            return restTemplate.exchange(url, HttpMethod.DELETE, entity, String.class);
+        } else {
+            return restTemplate.exchange(url, HttpMethod.DELETE, entity, String.class, map);
+        }
+    }
+
+
+    /**
      * 获取restTemplate 实例
      *
      * @return
      */
     private static RestTemplate getRestTemplate() {
-        return SpringContextUtil.getBean("restTemplate");
+        return SpringContextUtil.getBean("myTemplate");
     }
 
     /**
